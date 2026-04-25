@@ -31,13 +31,25 @@ HERMES → core MCP (post_to_community)
 
 This is the first cross-service integration; several decisions are load-bearing for the rest of §15. Calling them out so they're locked in (or contested) before code lands.
 
-### D1. Transport between core and children: plain HTTP-RPC, not MCP
+### D1. Transport between core and children: ~~plain HTTP-RPC~~ MCP over UDS
 
-The core uses MCP to talk to Hermes (the agentic boundary). Core ↔ child is internal RPC; MCP framing adds tool-discovery and capability negotiation we don't use internally. A child's "tools" are its HTTP routes; the core knows them at compile-time.
+**Reversed during PR #2 review** (see PR #2 comment thread for full reasoning). Patrick pushed back that CLAUDE.md §2 rule 2 — "Each child MCP owns its platform end-to-end" — was being eroded; demoting children to HTTP-RPC services makes them not-MCPs. The original D1 motivations (MCP overhead, debuggability, request/response simplicity) didn't survive scrutiny:
 
-**Why this matters now:** the choice locks in the integration shape for telegram, reddit, matrix, etc. Picking HTTP-RPC keeps each child's interface explicit (TypeScript types shared via `@social-manifold/contracts` — to be created in this plan) and avoids the per-child MCP-server boilerplate.
+- "MCP token overhead" only applies to MCP-in-LLM-context. Service-to-service MCP traffic carries no LLM context.
+- "HTTP debuggable with curl" — MCP is JSON-RPC over the transport; equivalently debuggable.
+- "We just need request/response now" — but `monitor_mentions`, `dm_persona`, Discord gateway, Telegram updates, and Matrix sync (all on §15's roadmap) need streaming, and MCP's notification/subscription model is exactly what fits. Building HTTP-RPC now means re-bolting MCP back on later, OR every child looking subtly different.
 
-**Reverse if:** a child legitimately needs to expose tools agentically (e.g., a debug/operator-facing console). Then it gets a parallel MCP listener; the internal RPC stays HTTP.
+**Resolved direction:**
+- Each child binds an MCP server to `/run/social-manifold/children/<name>.sock` (mode 0660, group `social-manifold`).
+- Transport: Streamable HTTP over a Unix domain socket (the SDK's `StreamableHTTPServerTransport` wired to a `node:http` server listening on the UDS path; the core uses `StreamableHTTPClientTransport` with a custom fetch via `undici.Agent({ connect: { socketPath } })`).
+- Core acts as MCP client to each child and MCP server to Hermes — same socket-perms-as-auth model as Hermes ↔ core, applied recursively.
+- Children expose their verb surface as MCP tools (e.g. `post_to_community`); the core's router resolves URI scheme → child MCP client.
+- Children own URI parsing for their own scheme (e.g. `discord://guild:G/channel:C`). The core only needs to extract the scheme to route.
+- D2 — D6 stand. The transport change does not touch the credential model or any other v1 design.
+
+**Cost paid in this plan:** small — one extra MCP transport setup, fetch wrapper for UDS. **Cost avoided:** retrofit across the codebase by Plan 4 (router hardens), Plan 7 (Skyvern children adopt the same pattern), and any streaming verb landing in §15.
+
+CLAUDE.md §7.5 has been updated with a "Core ↔ child MCP transport" subsection codifying this.
 
 ### D2. Discord library: `@discordjs/rest` only, no gateway
 
