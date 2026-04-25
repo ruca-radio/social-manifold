@@ -7,3 +7,31 @@ services:
     stdin_open: true
     tty: false
     restart: "no"
+    networks:
+      - manifold_core
+
+  vault:
+    build:
+      context: .
+      dockerfile: services/persona-vault/Dockerfile
+    image: social-manifold/persona-vault:dev
+    restart: unless-stopped
+    networks:
+      - manifold_core
+    volumes:
+      # personas directory mounted read-only — vault never writes back
+      - ./personas:/var/social-manifold/personas:ro
+      # age key bind-mounted from the host path defined in .env
+      - ${AGE_KEY_PATH:-./personas/_staging_alpha/.age.key}:/etc/social-manifold/age.key:ro
+      # canonical Unix-socket directory; created by scripts/setup-runtime-dir.sh
+      # — compose does NOT create it, see ops/local/runbook.md
+      - /run/social-manifold:/run/social-manifold
+      # audit log persists across restarts
+      - vault_audit:/var/lib/social-manifold
+
+networks:
+  manifold_core:
+    driver: bridge
+
+volumes:
+  vault_audit:
