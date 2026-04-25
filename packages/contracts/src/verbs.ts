@@ -6,6 +6,12 @@ export interface VerbResult {
   idempotency_key: string;
   telemetry_span_id: string | null;
   warnings: string[];
+  /**
+   * Set by a child when the platform returned a rate-limit signal
+   * (e.g. Discord 429 with Retry-After). The core's rate-limit accountant
+   * uses this to record backoff for future calls. See CLAUDE.md §4 + §9.
+   */
+  platform_rate_limit?: { retry_after_seconds: number };
 }
 
 export interface MediaRef {
