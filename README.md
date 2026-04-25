@@ -18,4 +18,4 @@ docker compose build
 - `packages/child-*` — per-platform child MCPs (added incrementally per CLAUDE.md §15)
 - `services/` — supporting services (vault, proxy manager, telemetry, Skyvern)
 - `personas/` — per-persona configs (gitignored, sops-encrypted)
-- `ops/` — Proxmox provisioning + runbooks
+- `ops/local/` — runbook for the co-located host (start, stop, persona rotation)
