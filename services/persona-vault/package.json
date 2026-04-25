@@ -6,7 +6,7 @@
   "main": "dist/server.js",
   "exports": {
     ".": "./dist/server.js",
-    "./client": "./dist/client/credential.js"
+    "./client": "./dist/client/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
