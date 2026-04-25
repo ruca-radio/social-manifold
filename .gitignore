@@ -5,6 +5,10 @@ dist/
 *.log
 .DS_Store
 coverage/
-/personas/
+/personas/*
 !/personas/_example/
+!/personas/_staging_alpha/
+/personas/*/credentials.sops.yaml
+/personas/*/.age.key
+/personas/*/browser-profile/
 /services/skyvern/
