@@ -3,7 +3,7 @@ import type {
   PostToCommunityInput,
   VerbResult,
 } from "@social-manifold/contracts";
-import { parseCommunityRef } from "../router/route-by-uri.js";
+import { getScheme } from "../router/route-by-uri.js";
 import { DiscordChildClient } from "../child-clients/discord.js";
 
 export interface PostToCommunityDeps {
@@ -15,9 +15,9 @@ export async function postToCommunity(
   deps: PostToCommunityDeps,
 ): Promise<VerbResult> {
   const idempotencyKey = input.idempotency_key ?? randomUUID();
-  const ref = parseCommunityRef(input.community_ref);
+  const scheme = getScheme(input.community_ref);
 
-  if (!ref) {
+  if (scheme === null) {
     return {
       status: "failed",
       platform_response_id: null,
@@ -27,22 +27,16 @@ export async function postToCommunity(
     };
   }
 
-  if (ref.platform === "discord") {
+  if (scheme === "discord") {
     try {
-      const result = await deps.discord.postMessage({
-        persona_id: input.persona_id,
-        guild_id: ref.guild_id,
-        channel_id: ref.channel_id,
-        content: input.content,
+      // Forward the verb to the discord child MCP. The child parses the
+      // URI sub-format itself, fetches creds from vault, and returns its
+      // own VerbResult; we pass it through with the idempotency_key we
+      // generated (or that the caller supplied).
+      return await deps.discord.postToCommunity({
+        ...input,
         idempotency_key: idempotencyKey,
       });
-      return {
-        status: "ok",
-        platform_response_id: result.message_id,
-        idempotency_key: idempotencyKey,
-        telemetry_span_id: null,
-        warnings: [],
-      };
     } catch (err) {
       return {
         status: "failed",
@@ -59,8 +53,6 @@ export async function postToCommunity(
     platform_response_id: null,
     idempotency_key: idempotencyKey,
     telemetry_span_id: null,
-    warnings: [
-      `unsupported platform: ${(ref as { platform: string }).platform}`,
-    ],
+    warnings: [`unsupported platform: ${scheme}`],
   };
 }

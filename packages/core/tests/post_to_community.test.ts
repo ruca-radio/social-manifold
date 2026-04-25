@@ -1,22 +1,26 @@
 import { describe, it, expect } from "vitest";
 import { postToCommunity } from "../src/verbs/post_to_community.js";
 import type { DiscordChildClient } from "../src/child-clients/discord.js";
+import type { VerbResult } from "@social-manifold/contracts";
 
 interface CallSpy {
   calls: Array<Record<string, unknown>>;
-  result?: { message_id: string; channel_id: string };
+  result?: VerbResult;
   throws?: Error;
 }
 
 function fakeDiscord(spy: CallSpy): DiscordChildClient {
   return {
-    postMessage: async (payload: Record<string, unknown>) => {
-      spy.calls.push(payload);
+    postToCommunity: async (input: Record<string, unknown>) => {
+      spy.calls.push(input);
       if (spy.throws) throw spy.throws;
       return (
         spy.result ?? {
-          message_id: "msg-1",
-          channel_id: payload.channel_id as string,
+          status: "ok",
+          platform_response_id: "msg-1",
+          idempotency_key: input.idempotency_key as string,
+          telemetry_span_id: null,
+          warnings: [],
         }
       );
     },
@@ -24,7 +28,7 @@ function fakeDiscord(spy: CallSpy): DiscordChildClient {
 }
 
 describe("postToCommunity", () => {
-  it("routes a discord:// ref to the discord child and returns ok status", async () => {
+  it("forwards a discord:// ref to the discord child and returns its VerbResult", async () => {
     const spy: CallSpy = { calls: [] };
     const result = await postToCommunity(
       {
@@ -42,8 +46,7 @@ describe("postToCommunity", () => {
     expect(result.warnings).toEqual([]);
 
     expect(spy.calls).toHaveLength(1);
-    expect(spy.calls[0].guild_id).toBe("111");
-    expect(spy.calls[0].channel_id).toBe("222");
+    expect(spy.calls[0].community_ref).toBe("discord://guild:111/channel:222");
     expect(spy.calls[0].content).toBe("hi");
     expect(spy.calls[0].idempotency_key).toBe("k1");
   });
@@ -61,9 +64,26 @@ describe("postToCommunity", () => {
     expect(result.idempotency_key).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
+    expect(spy.calls[0].idempotency_key).toBe(result.idempotency_key);
   });
 
-  it("returns failed status with a warning for unrecognized schemes", async () => {
+  it("returns failed status with a warning for non-URI refs", async () => {
+    const spy: CallSpy = { calls: [] };
+    const result = await postToCommunity(
+      {
+        persona_id: "p1",
+        community_ref: "not-a-uri",
+        content: "hi",
+        idempotency_key: "k1",
+      },
+      { discord: fakeDiscord(spy) },
+    );
+    expect(result.status).toBe("failed");
+    expect(result.warnings[0]).toContain("unrecognized community_ref");
+    expect(spy.calls).toEqual([]);
+  });
+
+  it("returns failed status for an unsupported scheme", async () => {
     const spy: CallSpy = { calls: [] };
     const result = await postToCommunity(
       {
@@ -75,15 +95,14 @@ describe("postToCommunity", () => {
       { discord: fakeDiscord(spy) },
     );
     expect(result.status).toBe("failed");
-    expect(result.platform_response_id).toBeNull();
-    expect(result.warnings[0]).toContain("unrecognized community_ref");
+    expect(result.warnings[0]).toContain("unsupported platform");
     expect(spy.calls).toEqual([]);
   });
 
   it("returns failed status when the child throws", async () => {
     const spy: CallSpy = {
       calls: [],
-      throws: new Error("discord 503"),
+      throws: new Error("child mcp call failed"),
     };
     const result = await postToCommunity(
       {
@@ -95,7 +114,6 @@ describe("postToCommunity", () => {
       { discord: fakeDiscord(spy) },
     );
     expect(result.status).toBe("failed");
-    expect(result.platform_response_id).toBeNull();
-    expect(result.warnings[0]).toContain("discord 503");
+    expect(result.warnings[0]).toContain("child mcp call failed");
   });
 });

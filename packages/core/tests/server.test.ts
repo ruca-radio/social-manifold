@@ -5,7 +5,13 @@ import { createServer } from "../src/server.js";
 import type { DiscordChildClient } from "../src/child-clients/discord.js";
 
 const fakeDiscord = {
-  postMessage: async () => ({ message_id: "fake-msg-9", channel_id: "c1" }),
+  postToCommunity: async (input: { idempotency_key?: string }) => ({
+    status: "ok",
+    platform_response_id: "fake-msg-9",
+    idempotency_key: input.idempotency_key ?? "generated",
+    telemetry_span_id: null,
+    warnings: [],
+  }),
 } as unknown as DiscordChildClient;
 
 describe("MCP server", () => {

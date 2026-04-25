@@ -50,12 +50,10 @@ export function createServer(opts: CreateServerOptions): McpServer {
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url);
 if (isMain) {
-  const discordHost = process.env.CHILD_DISCORD_HOST ?? "child-discord";
-  const discordPort = Number(process.env.CHILD_DISCORD_PORT ?? "7811");
-  const discord = new DiscordChildClient({
-    host: discordHost,
-    port: discordPort,
-  });
+  const discordSocket =
+    process.env.CHILD_DISCORD_SOCKET_PATH ??
+    "/run/social-manifold/children/discord.sock";
+  const discord = new DiscordChildClient({ socketPath: discordSocket });
 
   const server = createServer({ discord });
   const transport = new StdioServerTransport();

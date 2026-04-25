@@ -35,15 +35,14 @@ services:
       dockerfile: packages/child-discord/Dockerfile
     image: social-manifold/child-discord:dev
     restart: unless-stopped
-    networks:
-      - manifold_core
     depends_on:
       - vault
     environment:
-      CHILD_DISCORD_PORT: "7811"
+      CHILD_DISCORD_SOCKET_PATH: /run/social-manifold/children/discord.sock
       VAULT_SOCKET_PATH: /run/social-manifold/vault.sock
     volumes:
-      # vault socket — same canonical mount as the vault service
+      # MCP-over-UDS — bind both vault.sock and the children/ dir from the host.
+      # Created by scripts/setup-runtime-dir.sh (see ops/local/runbook.md).
       - /run/social-manifold:/run/social-manifold
 
 networks:

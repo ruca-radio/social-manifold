@@ -1,17 +1,13 @@
-export interface DiscordCommunityRef {
-  platform: "discord";
-  guild_id: string;
-  channel_id: string;
-}
+/**
+ * Extract the scheme from a community_ref URI.
+ *
+ * Children own the parsing of their own URI sub-format; the core only
+ * needs the scheme to choose which child MCP to forward to. See
+ * CLAUDE.md §7.5 — Core ↔ child MCP transport.
+ */
+const SCHEME = /^([a-z][a-z0-9+.-]*):\/\//;
 
-export type CommunityRef = DiscordCommunityRef;
-
-const DISCORD = /^discord:\/\/guild:(\d+)\/channel:(\d+)$/;
-
-export function parseCommunityRef(ref: string): CommunityRef | null {
-  const m = ref.match(DISCORD);
-  if (m) {
-    return { platform: "discord", guild_id: m[1], channel_id: m[2] };
-  }
-  return null;
+export function getScheme(ref: string): string | null {
+  const m = ref.match(SCHEME);
+  return m ? m[1] : null;
 }
