@@ -12,6 +12,7 @@ sudo ./scripts/setup-runtime-dir.sh
 
 This:
 - Creates `/run/social-manifold/` with mode `0750` and owner `root:social-manifold`.
+- Creates `/run/social-manifold/children/` with the same mode/owner — this is where each child MCP binds its UDS (e.g. `discord.sock`).
 - Creates the `social-manifold` group if missing.
 - Adds the invoking user to the group. **Group membership doesn't take effect in the current shell** — log out and back in, or `newgrp social-manifold`, before continuing.
 

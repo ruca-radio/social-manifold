@@ -380,6 +380,33 @@ Because Hermes and the core MCP share a host:
 - `unix:///run/social-manifold/core.sock` (default, production)
 - `tcp://127.0.0.1:7801` (development convenience only)
 
+### Core ↔ child MCP transport: Unix domain socket (recursive)
+
+Children are MCP servers (per §2 rule 2 — "Each child MCP owns its platform
+end-to-end"). The transport between core and each child mirrors the
+Hermes ↔ core link, applied recursively:
+
+- Each child binds an MCP server to `/run/social-manifold/children/<name>.sock`
+  (mode 0660, group `social-manifold`). E.g. `discord.sock`, `telegram.sock`.
+- Core acts as an **MCP client** to each child (and an MCP server to Hermes).
+  No HTTP-RPC, no bespoke RPC.
+- Same socket-perms-as-auth model: filesystem permissions enforce trust.
+- The router in core resolves URI schemes (e.g. `discord://...`) to the
+  matching child MCP client connection. Child MCPs expose their verb
+  surface as MCP tools (e.g. `post_to_community`); core forwards calls.
+
+Why MCP-as-transport everywhere, not internal HTTP-RPC:
+- Protocol uniformity across the federation: every child looks the same
+  to core; new children plug in without bespoke clients.
+- MCP tool listing gives free child-capability discovery.
+- Streaming verbs (Discord gateway, Telegram updates, Matrix sync) get
+  MCP's notification/subscription model without a transport rewrite.
+- Service-to-service MCP traffic carries no LLM context — the token-
+  overhead concerns that apply to MCP-in-LLM-context do not apply here.
+
+The directory `/run/social-manifold/children/` is created by
+`scripts/setup-runtime-dir.sh` (same mode/group as the parent).
+
 ### Network isolation rules (non-negotiable)
 
 1. **Persona browser containers run on a dedicated Docker bridge

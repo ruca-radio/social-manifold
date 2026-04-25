@@ -14,6 +14,7 @@
 set -euo pipefail
 
 RUNTIME_DIR="/run/social-manifold"
+CHILDREN_DIR="/run/social-manifold/children"
 GROUP_NAME="social-manifold"
 INVOKING_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 
@@ -61,11 +62,25 @@ ensure_runtime_dir() {
   echo "$RUNTIME_DIR → mode 0750, owner root:$GROUP_NAME"
 }
 
+ensure_children_dir() {
+  if [[ -d "$CHILDREN_DIR" ]]; then
+    echo "$CHILDREN_DIR already exists"
+  else
+    echo "creating $CHILDREN_DIR"
+    install -d -o root -g "$GROUP_NAME" -m 0750 "$CHILDREN_DIR"
+  fi
+
+  chown root:"$GROUP_NAME" "$CHILDREN_DIR"
+  chmod 0750 "$CHILDREN_DIR"
+  echo "$CHILDREN_DIR → mode 0750, owner root:$GROUP_NAME"
+}
+
 main() {
   require_root
   ensure_group
   ensure_user_in_group
   ensure_runtime_dir
+  ensure_children_dir
   echo
   echo "done. /run is tmpfs on Linux — re-run this script after each host reboot."
 }
