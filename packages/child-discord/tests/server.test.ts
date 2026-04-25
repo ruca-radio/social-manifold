@@ -10,6 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createVaultServer } from "@social-manifold/persona-vault";
 import { VaultClient } from "@social-manifold/persona-vault/client";
 import { createChildDiscordMcpServer } from "../src/mcp-server.js";
+import { RateLimitedError } from "../src/adapter.js";
 import type { DiscordRestPort } from "../src/deps.js";
 
 const exec = promisify(execFile);
@@ -229,5 +230,25 @@ describe("child-discord MCP tool", () => {
     expect(newEntries[1].purpose).toBe("post_to_community:ik-ok");
     // and the audit log must not contain the secret
     expect(auditAfter).not.toContain(rig.bot_token_sentinel);
+  });
+
+  it("translates a RateLimitedError into VerbResult.platform_rate_limit", async () => {
+    const rateLimitedRest: DiscordRestPort = {
+      async postMessage() {
+        throw new RateLimitedError(60);
+      },
+    };
+    const result = await callTool(rig, rateLimitedRest, {
+      persona_id: "p_alpha",
+      community_ref: "discord://guild:1/channel:2",
+      content: "x",
+      idempotency_key: "ik-rl",
+    });
+    expect(result.status).toBe("failed");
+    expect(
+      (result.platform_rate_limit as { retry_after_seconds: number })
+        ?.retry_after_seconds,
+    ).toBe(60);
+    expect((result.warnings as string[])[0]).toContain("retry_after_seconds=60");
   });
 });

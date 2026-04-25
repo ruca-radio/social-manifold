@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Credential } from "@social-manifold/persona-vault/client";
-import { postMessage } from "../src/adapter.js";
+import { postMessage, RateLimitedError } from "../src/adapter.js";
 import type { DiscordRestPort } from "../src/deps.js";
 
 interface CallSpy {
@@ -69,5 +69,19 @@ describe("postMessage adapter", () => {
       postMessage(cred, fakeRest(spy), { channel_id: "ch1", content: "x" }),
     ).rejects.toThrow(/bot_token/);
     expect(spy.calls).toHaveLength(0);
+  });
+
+  it("propagates a RateLimitedError from the REST port through .use()", async () => {
+    const cred = new Credential({ bot_token: "T" });
+    const rest: DiscordRestPort = {
+      async postMessage() {
+        throw new RateLimitedError(120);
+      },
+    };
+    await expect(
+      postMessage(cred, rest, { channel_id: "c", content: "x" }),
+    ).rejects.toBeInstanceOf(RateLimitedError);
+    // credential is still consumed (Credential.use() finally)
+    expect(cred.get("bot_token")).toBeUndefined();
   });
 });
