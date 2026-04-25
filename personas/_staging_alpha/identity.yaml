@@ -1,0 +1,15 @@
+id: _staging_alpha
+display_name: "Staging Alpha (test persona, no production access)"
+type: branded_bot
+timezone: UTC
+locale: en-US
+working_hours: "00:00-23:59"
+posting_cadence_minutes: [1, 3]
+proxy_pool: none_test_only
+disclosed_automation: true
+platforms:
+  discord:
+    enabled: true
+    credential_ref: discord_token
+  reddit:
+    enabled: false
