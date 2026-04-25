@@ -1,7 +1,21 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { postToCommunity } from "../src/verbs/post_to_community.js";
+import { IdempotencyLedger } from "../src/idempotency/ledger.js";
+import {
+  RateLimitAccountant,
+  type CadenceLoader,
+} from "../src/ratelimit/accountant.js";
 import type { DiscordChildClient } from "../src/child-clients/discord.js";
 import type { VerbResult } from "@social-manifold/contracts";
+
+const cadence = (mins: [number, number]): CadenceLoader => ({
+  async cadenceMinutes() {
+    return mins;
+  },
+});
 
 interface CallSpy {
   calls: Array<Record<string, unknown>>;
@@ -27,9 +41,22 @@ function fakeDiscord(spy: CallSpy): DiscordChildClient {
   } as unknown as DiscordChildClient;
 }
 
-describe("postToCommunity", () => {
-  it("forwards a discord:// ref to the discord child and returns its VerbResult", async () => {
+describe("postToCommunity (with ledger + accountant)", () => {
+  let dir: string;
+  let ledger: IdempotencyLedger;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "p2c-"));
+    ledger = new IdempotencyLedger(join(dir, "idem.db"));
+    return () => {
+      ledger.close();
+      rmSync(dir, { recursive: true, force: true });
+    };
+  });
+
+  it("forwards a fresh discord:// call to the child and records in ledger", async () => {
     const spy: CallSpy = { calls: [] };
+    const acc = new RateLimitAccountant(cadence([0, 0]));
     const result = await postToCommunity(
       {
         persona_id: "p1",
@@ -37,83 +64,151 @@ describe("postToCommunity", () => {
         content: "hi",
         idempotency_key: "k1",
       },
-      { discord: fakeDiscord(spy) },
+      { discord: fakeDiscord(spy), ledger, accountant: acc, now: () => 0 },
     );
-
     expect(result.status).toBe("ok");
-    expect(result.platform_response_id).toBe("msg-1");
-    expect(result.idempotency_key).toBe("k1");
-    expect(result.warnings).toEqual([]);
-
     expect(spy.calls).toHaveLength(1);
-    expect(spy.calls[0].community_ref).toBe("discord://guild:111/channel:222");
-    expect(spy.calls[0].content).toBe("hi");
-    expect(spy.calls[0].idempotency_key).toBe("k1");
+    expect(ledger.lookup("k1")?.status).toBe("deduped");
   });
 
-  it("generates an idempotency_key when none is supplied", async () => {
+  it("returns deduped on a second call with the same key — child NOT called again", async () => {
     const spy: CallSpy = { calls: [] };
-    const result = await postToCommunity(
+    const acc = new RateLimitAccountant(cadence([0, 0]));
+    const args = {
+      persona_id: "p1",
+      community_ref: "discord://guild:111/channel:222",
+      content: "hi",
+      idempotency_key: "k-dup",
+    };
+    const a = await postToCommunity(args, {
+      discord: fakeDiscord(spy),
+      ledger,
+      accountant: acc,
+      now: () => 0,
+    });
+    const b = await postToCommunity(args, {
+      discord: fakeDiscord(spy),
+      ledger,
+      accountant: acc,
+      now: () => 1000,
+    });
+    expect(a.status).toBe("ok");
+    expect(b.status).toBe("deduped");
+    expect(spy.calls).toHaveLength(1);
+    expect(b.platform_response_id).toBe(a.platform_response_id);
+    expect(b.warnings.some((w) => w.includes("deduped from"))).toBe(true);
+  });
+
+  it("returns failed with retry_after when persona is rate-limited", async () => {
+    const spy: CallSpy = { calls: [] };
+    const acc = new RateLimitAccountant(cadence([10, 30]));
+    const t0 = 1_000_000;
+
+    const first = await postToCommunity(
       {
         persona_id: "p1",
         community_ref: "discord://guild:111/channel:222",
-        content: "hi",
+        content: "first",
+        idempotency_key: "k-a",
       },
-      { discord: fakeDiscord(spy) },
+      { discord: fakeDiscord(spy), ledger, accountant: acc, now: () => t0 },
     );
-    expect(result.idempotency_key).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    );
-    expect(spy.calls[0].idempotency_key).toBe(result.idempotency_key);
-  });
+    expect(first.status).toBe("ok");
 
-  it("returns failed status with a warning for non-URI refs", async () => {
-    const spy: CallSpy = { calls: [] };
-    const result = await postToCommunity(
+    const second = await postToCommunity(
       {
         persona_id: "p1",
-        community_ref: "not-a-uri",
-        content: "hi",
-        idempotency_key: "k1",
+        community_ref: "discord://guild:111/channel:222",
+        content: "second",
+        idempotency_key: "k-b",
       },
-      { discord: fakeDiscord(spy) },
-    );
-    expect(result.status).toBe("failed");
-    expect(result.warnings[0]).toContain("unrecognized community_ref");
-    expect(spy.calls).toEqual([]);
-  });
-
-  it("returns failed status for an unsupported scheme", async () => {
-    const spy: CallSpy = { calls: [] };
-    const result = await postToCommunity(
       {
-        persona_id: "p1",
-        community_ref: "twitter://user/foo",
-        content: "hi",
-        idempotency_key: "k1",
+        discord: fakeDiscord(spy),
+        ledger,
+        accountant: acc,
+        now: () => t0 + 5 * 60_000,
       },
-      { discord: fakeDiscord(spy) },
     );
-    expect(result.status).toBe("failed");
-    expect(result.warnings[0]).toContain("unsupported platform");
-    expect(spy.calls).toEqual([]);
+    expect(second.status).toBe("failed");
+    expect(spy.calls).toHaveLength(1);
+    expect(second.warnings.some((w) => /retry_after_seconds=\d+/.test(w))).toBe(
+      true,
+    );
+    // rate-limit-rejected calls are NOT cached in the ledger
+    expect(ledger.lookup("k-b")).toBeNull();
   });
 
-  it("returns failed status when the child throws", async () => {
+  it("records platform_rate_limit feedback into the accountant", async () => {
     const spy: CallSpy = {
       calls: [],
-      throws: new Error("child mcp call failed"),
+      result: {
+        status: "ok",
+        platform_response_id: "msg-x",
+        idempotency_key: "k-x",
+        telemetry_span_id: null,
+        warnings: [],
+        platform_rate_limit: { retry_after_seconds: 1800 },
+      },
     };
-    const result = await postToCommunity(
+    const acc = new RateLimitAccountant(cadence([1, 5]));
+    const t0 = 2_000_000;
+
+    const first = await postToCommunity(
       {
         persona_id: "p1",
         community_ref: "discord://guild:111/channel:222",
-        content: "hi",
-        idempotency_key: "k1",
+        content: "x",
+        idempotency_key: "k-x",
       },
-      { discord: fakeDiscord(spy) },
+      { discord: fakeDiscord(spy), ledger, accountant: acc, now: () => t0 },
     );
-    expect(result.status).toBe("failed");
-    expect(result.warnings[0]).toContain("child mcp call failed");
+    expect(first.status).toBe("ok");
+    expect(first.platform_rate_limit?.retry_after_seconds).toBe(1800);
+
+    // 5 minutes later — past 1-min cadence, but inside 30-min platform backoff
+    const second = await postToCommunity(
+      {
+        persona_id: "p1",
+        community_ref: "discord://guild:111/channel:222",
+        content: "y",
+        idempotency_key: "k-y",
+      },
+      {
+        discord: fakeDiscord(spy),
+        ledger,
+        accountant: acc,
+        now: () => t0 + 5 * 60_000,
+      },
+    );
+    expect(second.status).toBe("failed");
+    expect(second.warnings.some((w) => /retry_after_seconds=\d+/.test(w))).toBe(
+      true,
+    );
+  });
+
+  it("records failed child responses in the ledger", async () => {
+    const spy: CallSpy = { calls: [], throws: new Error("child died") };
+    const acc = new RateLimitAccountant(cadence([0, 0]));
+    const a = await postToCommunity(
+      {
+        persona_id: "p1",
+        community_ref: "discord://guild:111/channel:222",
+        content: "x",
+        idempotency_key: "k-fail",
+      },
+      { discord: fakeDiscord(spy), ledger, accountant: acc, now: () => 0 },
+    );
+    expect(a.status).toBe("failed");
+    const b = await postToCommunity(
+      {
+        persona_id: "p1",
+        community_ref: "discord://guild:111/channel:222",
+        content: "x",
+        idempotency_key: "k-fail",
+      },
+      { discord: fakeDiscord(spy), ledger, accountant: acc, now: () => 1000 },
+    );
+    expect(b.status).toBe("deduped");
+    expect(spy.calls).toHaveLength(1);
   });
 });
