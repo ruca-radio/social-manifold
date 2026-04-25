@@ -59,6 +59,16 @@ sudo ./scripts/setup-runtime-dir.sh    # /run is tmpfs — directory is gone
 docker compose up -d
 ```
 
+## Rate-limit accountant: state lifecycle
+
+Per-persona last-action timestamps live in the core's process memory and clear on restart. After `docker compose restart core`, the very first action per (persona, platform) sees no behavioral throttle — the cadence floor activates from the first action onward.
+
+This is fine for the typical operational pattern (restart, take one un-throttled action, normal cadence resumes). If you're restarting often during a staged rollout AND want strict cadence from the first post, wait `posting_cadence_minutes[0]` after restart before issuing the first verb call.
+
+The idempotency ledger does NOT have this caveat — it's SQLite-backed in the `core_state` volume and survives restarts.
+
+Editing `personas/<id>/identity.yaml` (e.g. changing `posting_cadence_minutes`) requires `docker compose restart core` to pick up — the identity loader caches per-process.
+
 ## Persona rotation
 
 Stub. Persona rotation runbook lands with later plans (when a child MCP first depends on a real persona). For staging, regenerate by deleting the persona dir and re-running `pnpm persona:bootstrap-staging`.

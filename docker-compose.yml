@@ -7,8 +7,19 @@ services:
     stdin_open: true
     tty: false
     restart: "no"
+    environment:
+      CORE_IDEMPOTENCY_DB: /var/lib/social-manifold/idempotency.db
+      CORE_PERSONAS_ROOT: /var/social-manifold/personas
+      CHILD_DISCORD_SOCKET_PATH: /run/social-manifold/children/discord.sock
     networks:
       - manifold_core
+    volumes:
+      # personas dir read-only — core reads identity.yaml for cadence config
+      - ./personas:/var/social-manifold/personas:ro
+      # idempotency ledger persists across restarts (Plan 4 §9)
+      - core_state:/var/lib/social-manifold
+      # MCP children sockets (and core's own when added later)
+      - /run/social-manifold:/run/social-manifold
 
   vault:
     build:
@@ -51,3 +62,4 @@ networks:
 
 volumes:
   vault_audit:
+  core_state:
