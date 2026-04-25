@@ -1,129 +1,102 @@
 import {
   createServer as createHttpServer,
-  type Server,
-  type IncomingMessage,
-  type ServerResponse,
+  type Server as HttpServer,
 } from "node:http";
+import { unlink, chmod, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { VaultClient } from "@social-manifold/persona-vault/client";
-import type {
-  DiscordPostMessageRequest,
-  DiscordPostMessageResponse,
-} from "@social-manifold/contracts";
+import { createChildDiscordMcpServer } from "./mcp-server.js";
 import { liveDiscordRest, type DiscordRestPort } from "./deps.js";
-import { postMessage } from "./adapter.js";
 
-export interface ChildDiscordConfig {
-  port: number;
+export interface ChildDiscordServerConfig {
+  socketPath: string;
   vault: VaultClient;
   rest: DiscordRestPort;
 }
 
-function send(res: ServerResponse, status: number, body: unknown): void {
-  res.statusCode = status;
-  res.setHeader("content-type", "application/json");
-  res.end(JSON.stringify(body));
+export interface ChildDiscordServerHandle {
+  http: HttpServer;
+  mcp: McpServer;
+  close(): Promise<void>;
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
-  const text = Buffer.concat(chunks).toString("utf8");
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-async function handlePostMessage(
-  req: IncomingMessage,
-  res: ServerResponse,
-  vault: VaultClient,
-  rest: DiscordRestPort,
-): Promise<void> {
-  const body = (await readJsonBody(req)) as Partial<DiscordPostMessageRequest> | null;
-  if (
-    !body ||
-    typeof body.persona_id !== "string" ||
-    typeof body.channel_id !== "string" ||
-    typeof body.content !== "string" ||
-    typeof body.idempotency_key !== "string"
-  ) {
-    send(res, 400, { error: "missing required fields" });
-    return;
-  }
-
-  let cred;
-  try {
-    cred = await vault.getCredential(body.persona_id, "discord", {
-      requester_id: "child-discord",
-      purpose: `post-message:${body.idempotency_key}`,
-    });
-  } catch (err) {
-    send(res, 404, {
-      error: "credential not available",
-      detail: (err as Error).message,
-    });
-    return;
-  }
-
-  try {
-    const result: DiscordPostMessageResponse = await postMessage(cred, rest, {
-      channel_id: body.channel_id,
-      content: body.content,
-    });
-    send(res, 200, result);
-  } catch (err) {
-    send(res, 502, {
-      error: "discord call failed",
-      detail: (err as Error).message,
-    });
-  }
-}
-
-function route(vault: VaultClient, rest: DiscordRestPort) {
-  return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    try {
-      if (req.method === "POST" && req.url === "/v1/post-message") {
-        return handlePostMessage(req, res, vault, rest);
-      }
-      send(res, 404, { error: "not found" });
-    } catch {
-      send(res, 500, { error: "internal" });
-    }
-  };
-}
-
+/**
+ * Spin up the child-discord MCP server on a Unix domain socket.
+ * Per CLAUDE.md §7.5: socket mode 0660, group ownership shared with the
+ * core via the social-manifold group; filesystem perms are the auth.
+ */
 export async function createChildDiscordServer(
-  config: ChildDiscordConfig,
-): Promise<Server> {
-  const server = createHttpServer(route(config.vault, config.rest));
+  config: ChildDiscordServerConfig,
+): Promise<ChildDiscordServerHandle> {
+  const mcp = createChildDiscordMcpServer({
+    vault: config.vault,
+    rest: config.rest,
+  });
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+  await mcp.connect(transport);
+
+  await mkdir(dirname(config.socketPath), { recursive: true });
+  try {
+    await unlink(config.socketPath);
+  } catch {
+    /* socket didn't exist */
+  }
+  const httpServer = createHttpServer((req, res) => {
+    transport.handleRequest(req, res);
+  });
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(config.port, "0.0.0.0", () => {
-      server.removeListener("error", reject);
+    httpServer.once("error", reject);
+    httpServer.listen(config.socketPath, () => {
+      httpServer.removeListener("error", reject);
       resolve();
     });
   });
-  return server;
+  await chmod(config.socketPath, 0o660);
+
+  return {
+    http: httpServer,
+    mcp,
+    async close(): Promise<void> {
+      await new Promise<void>((r) => httpServer.close(() => r()));
+      await mcp.close();
+    },
+  };
 }
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url);
 if (isMain) {
-  const port = Number(process.env.CHILD_DISCORD_PORT ?? "7811");
+  const socketPath =
+    process.env.CHILD_DISCORD_SOCKET_PATH ??
+    "/run/social-manifold/children/discord.sock";
   const vaultSocket =
     process.env.VAULT_SOCKET_PATH ?? "/run/social-manifold/vault.sock";
 
   const { existsSync } = await import("node:fs");
+  if (!existsSync(dirname(socketPath))) {
+    console.error(
+      `child-discord: socket directory ${dirname(socketPath)} does not exist. ` +
+        "Run scripts/setup-runtime-dir.sh first (see ops/local/runbook.md).",
+    );
+    process.exit(1);
+  }
   if (!existsSync(vaultSocket)) {
     console.error(
       `child-discord: vault socket ${vaultSocket} does not exist. Is the vault running?`,
     );
     process.exit(1);
   }
+
   const vault = new VaultClient(vaultSocket);
-  await createChildDiscordServer({ port, vault, rest: liveDiscordRest });
-  console.error(`child-discord: listening on :${port}`);
+  await createChildDiscordServer({
+    socketPath,
+    vault,
+    rest: liveDiscordRest,
+  });
+  console.error(`child-discord: MCP listening on ${socketPath}`);
 }

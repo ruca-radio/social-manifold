@@ -1,10 +1,14 @@
 import type { Credential } from "@social-manifold/persona-vault/client";
-import type { DiscordPostMessageResponse } from "@social-manifold/contracts";
 import type { DiscordRestPort } from "./deps.js";
 
 export interface PostMessageInput {
   channel_id: string;
   content: string;
+}
+
+export interface PostMessageResult {
+  message_id: string;
+  channel_id: string;
 }
 
 /**
@@ -20,7 +24,7 @@ export async function postMessage(
   cred: Credential,
   rest: DiscordRestPort,
   input: PostMessageInput,
-): Promise<DiscordPostMessageResponse> {
+): Promise<PostMessageResult> {
   return cred.use(async (raw) => {
     const token = raw.bot_token;
     if (!token) {

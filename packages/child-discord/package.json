@@ -12,9 +12,11 @@
   },
   "dependencies": {
     "@discordjs/rest": "^2.4.0",
-    "discord-api-types": "^0.37.110",
+    "@modelcontextprotocol/sdk": "^1.0.4",
     "@social-manifold/contracts": "workspace:*",
-    "@social-manifold/persona-vault": "workspace:*"
+    "@social-manifold/persona-vault": "workspace:*",
+    "discord-api-types": "^0.37.110",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

@@ -10,7 +10,6 @@ RUN pnpm install --filter @social-manifold/child-discord... --frozen-lockfile
 COPY packages/contracts ./packages/contracts
 COPY services/persona-vault ./services/persona-vault
 COPY packages/child-discord ./packages/child-discord
-# Build workspace deps in dependency order before child-discord
 RUN pnpm --filter @social-manifold/contracts build
 RUN pnpm --filter @social-manifold/persona-vault build
 RUN pnpm --filter @social-manifold/child-discord build
@@ -22,7 +21,7 @@ COPY --from=build /out/dist ./dist
 COPY --from=build /out/package.json ./
 COPY --from=build /out/node_modules ./node_modules
 ENV NODE_ENV=production
-ENV CHILD_DISCORD_PORT=7811
+# MCP UDS — bound at the canonical path under /run/social-manifold/children/
+ENV CHILD_DISCORD_SOCKET_PATH=/run/social-manifold/children/discord.sock
 ENV VAULT_SOCKET_PATH=/run/social-manifold/vault.sock
-EXPOSE 7811
 CMD ["node", "dist/server.js"]
