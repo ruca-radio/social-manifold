@@ -17,6 +17,8 @@ This:
 
 `docker compose` does **not** create this directory. If it doesn't exist (or the perms drift), the vault and core containers fail fast on startup. That's by design — we'd rather see a loud error at boot than a subtle perms regression.
 
+The script is idempotent: stderr is empty and exit code is 0 on re-runs. Stdout switches from `creating ...` lines on the first run to `... already exists` lines on subsequent runs, plus one `→ mode 0750, owner root:social-manifold` line per run (re-applied unconditionally so perms drift gets corrected if anyone touches the directory by hand).
+
 ## Bootstrap a staging persona (one-time per operator)
 
 ```bash
