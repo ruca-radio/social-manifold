@@ -13,10 +13,14 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@social-manifold/contracts": "workspace:*",
+    "better-sqlite3": "^11.5.0",
+    "js-yaml": "^4.1.0",
     "undici": "^6.21.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.0",
     "tsx": "^4.7.0",
     "typescript": "^5.4.5",
