@@ -1,0 +1,25 @@
+{
+  "name": "@social-manifold/child-discord",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@discordjs/rest": "^2.4.0",
+    "discord-api-types": "^0.37.110",
+    "@social-manifold/contracts": "workspace:*",
+    "@social-manifold/persona-vault": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}
