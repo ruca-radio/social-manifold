@@ -111,7 +111,7 @@ Three rules govern this diagram:
 │       └── browser-profile/           ← mounted into Skyvern container
 │
 ├── ops/
-│   ├── proxmox/                       ← LXC/VM provisioning
+│   ├── local/                         ← runbook for the co-located host (start/stop, persona rotation)
 │   ├── compose/                       ← per-environment overrides
 │   └── runbooks/                      ← incident response, persona rotation
 │
@@ -220,6 +220,30 @@ platforms:
 - Decryption happens **only inside the running container**, never on disk in the clear.
 - Persona vault service is the only component allowed to read credentials. It exposes a request/response API to children, never bulk-dumps.
 
+### Persona container hardening (co-located deployment)
+
+Because the manifold runs on the same host as Hermes, persona
+containers receive additional hardening beyond standard Docker
+defaults:
+
+- `read_only: true` on the container filesystem. Writable paths are
+  declared explicitly as tmpfs or named volumes (browser profile,
+  Skyvern's scratch dir).
+- `cap_drop: [ALL]` then add back only what Chromium needs
+  (`SYS_ADMIN` is required for sandboxing; document the why in the
+  compose comments).
+- `security_opt: [no-new-privileges:true]`.
+- No `--privileged`. Ever.
+- The container's user is non-root, UID/GID matched to the persona's
+  profile directory ownership on the host.
+- `tmpfs` for `/tmp` with `noexec,nosuid` to limit drive-by exploit
+  utility.
+
+These are baseline. Skyvern's own container hardening (per its
+upstream docs) layers on top. If Skyvern's defaults conflict with
+any of the above, the manifold's settings win — open an issue,
+don't silently relax.
+
 ---
 
 ## 7. Browser Layer (Skyvern Integration)
@@ -276,6 +300,126 @@ Three-tier policy:
 1. **Tier 1 — Try not to trigger them.** Stealth posture + behavioral entropy + warmed sessions.
 2. **Tier 2 — Solver service for low-stakes.** 2Captcha/CapSolver for image/recaptcha when triggered. Budget per persona; alert on overage.
 3. **Tier 3 — Human handoff for high-stakes.** Skyvern's live-view URL + a Slack/Discord notification to the operator. Persona pauses; resumes after manual solve.
+
+---
+
+## 7.5. Co-location Topology and Trust Boundaries
+
+Social Manifold runs on the same host as Hermes (Patrick's main production
+machine), not on dedicated Proxmox infrastructure. This is a deliberate
+operational choice — lower coordination overhead, shared observability,
+no cross-host network — but it raises the bar on internal isolation.
+Co-location does not collapse trust boundaries; it makes them
+software-enforced rather than infrastructure-enforced.
+
+### Trust zones on the host
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ HOST (Patrick's production box)                                 │
+│                                                                 │
+│  ┌───────────────────┐         ┌─────────────────────────────┐  │
+│  │ Hermes (Tori)     │  Unix   │ social-manifold-core        │  │
+│  │ marketing agents  │◄───────►│ + API-backed child MCPs     │  │
+│  │                   │  socket │ (discord, telegram, reddit, │  │
+│  └───────────────────┘         │  matrix, bluesky, mastodon, │  │
+│         ZONE A                 │  discourse)                 │  │
+│                                └──────────────┬──────────────┘  │
+│                                               │ docker network: │
+│                                               │ manifold_core   │
+│                                               ▼                 │
+│                                ┌─────────────────────────────┐  │
+│                                │ persona_<id>_browser × N    │  │
+│                                │ (Skyvern + Chromium per     │  │
+│                                │  persona)                   │  │
+│                                │                             │  │
+│                                │ docker network:             │  │
+│                                │ manifold_browser_isolated   │  │
+│                                │ (no route to Zone A or B)   │  │
+│                                └──────────────┬──────────────┘  │
+│                                               │                 │
+│                                               ▼                 │
+│                                ┌─────────────────────────────┐  │
+│                                │ proxy-manager               │  │
+│                                │ (egress-only gateway)       │  │
+│                                └──────────────┬──────────────┘  │
+│                                               │                 │
+└───────────────────────────────────────────────┼─────────────────┘
+                                                ▼
+                                     mobile/residential proxy
+                                       → public internet
+```
+
+**Zone A — Hermes.** Marketing agents, LLM inference, agent state.
+Holds persona IDs only.
+
+**Zone B — Manifold control plane.** Core MCP, API-backed child MCPs,
+persona vault, idempotency ledger, telemetry collector. Holds credentials
+(decrypted only in-memory inside child MCPs that need them, never on disk
+in the clear, never returned to Zone A).
+
+**Zone C — Persona browsers.** One container per persona. Holds active
+browser sessions, cookies, profile data. Treated as semi-trusted —
+they execute against the open internet, sometimes load adversarial
+content, and can encounter captcha-solver injections. Worst-case
+compromise of a browser container must not reach Zone A or other
+personas.
+
+### Hermes ↔ Manifold transport: Unix domain socket
+
+Because Hermes and the core MCP share a host:
+
+- Bind core MCP to `/run/social-manifold/core.sock` (mode 0660).
+- Group ownership shared between the Hermes process user and the manifold
+  process user. No TCP listener.
+- No bearer token on the socket — filesystem permissions are the auth.
+- TCP listener may be added later if a remote Hermes ever consumes the
+  manifold; not in v1.
+
+`packages/core/src/server.ts` reads `SOCIAL_MANIFOLD_TRANSPORT` from env:
+- `unix:///run/social-manifold/core.sock` (default, production)
+- `tcp://127.0.0.1:7801` (development convenience only)
+
+### Network isolation rules (non-negotiable)
+
+1. **Persona browser containers run on a dedicated Docker bridge
+   network (`manifold_browser_isolated`)** with `internal: true` set
+   in compose, plus an explicit one-way route to the proxy-manager
+   container. They have **no** route to Zone A (Hermes) or Zone B
+   peers (other persona containers, core MCP, vault).
+
+2. **All persona browser egress goes through proxy-manager.** Direct
+   internet egress from persona containers is prohibited at the Docker
+   network level, not just by convention. If proxy-manager is down,
+   persona containers cannot make outbound requests — this is the
+   intended behavior.
+
+3. **DNS resolution for persona containers does NOT use the host
+   resolver.** Each persona's DNS goes through its assigned proxy or
+   a per-persona resolver matched to the proxy's exit geolocation.
+   Mismatched DNS-vs-IP geolocation is a known persona-fingerprinting
+   vector and an instant flag on Cloudflare/DataDome-protected sites.
+   Configure `dns:` in compose per-persona, do not inherit from host.
+
+4. **Filesystem mounts are minimum-necessary.** A persona container
+   mounts ONLY its own `personas/<id>/browser-profile/` directory.
+   No host paths, no other personas' directories, no shared scratch
+   space.
+
+5. **Resource limits are explicit.** Each persona browser container
+   declares `mem_limit`, `cpus`, and `pids_limit` in compose. A
+   runaway browser process must not be able to starve Hermes
+   inference scheduling on the shared host.
+
+### Egress accounting
+
+The proxy-manager logs every outbound request from every persona
+container. Egress IP must match the persona's assigned proxy exit.
+Mismatch triggers immediate persona quarantine (see §6). On the
+co-located host this check is doubly important — there is no
+network-level firewall between persona containers and the proxy-manager
+beyond Docker's bridge isolation, so application-layer accounting is
+the durable enforcement point.
 
 ---
 
@@ -385,9 +529,35 @@ pnpm test:shadow-detection
 
 **Never run integration tests with production persona credentials.** Staging personas live under `personas/_staging_*` and are clearly marked.
 
-### Deployment to Proxmox
+### Deployment (production)
 
-Deploy targets are LXC containers (one per child MCP) on Patrick's Proxmox host. Skyvern workers run in their own LXC with GPU passthrough disabled (browser work doesn't need it; reserve GPUs for inference). See `ops/proxmox/README.md` for the provisioning playbook.
+Social Manifold runs on Patrick's main production host alongside Hermes.
+There is no separate deployment target.
+
+- Bring up the stack with `docker compose up -d` from the project root.
+- The compose file declares three Docker networks:
+  - `manifold_core` — core MCP, API-backed children, persona vault,
+    telemetry. Internal only.
+  - `manifold_browser_isolated` — persona browser containers and
+    proxy-manager. `internal: true`. No route to `manifold_core`.
+  - `manifold_egress` — proxy-manager only, this is the single network
+    with external connectivity.
+- Hermes connects to core MCP via Unix socket at
+  `/run/social-manifold/core.sock`. The compose service for `core`
+  mounts `/run/social-manifold/` from the host with appropriate
+  group permissions.
+- Skyvern workers run as containers on `manifold_browser_isolated`,
+  one container per active persona. They do not require GPU
+  passthrough. Patrick's GPU resources remain dedicated to inference
+  workloads (Hermes / local LLMs).
+- Resource ceilings: each persona browser container is capped at
+  2 GB RAM and 1 CPU by default. Adjust per-persona in
+  `personas/<id>/identity.yaml` under `resources:` if a specific
+  persona's workload demands more.
+
+`ops/local/runbook.md` covers start, stop, persona rotation, log
+extraction, and recovery from a host reboot. There is no
+`ops/proxmox/` directory in this project.
 
 ---
 
@@ -431,15 +601,16 @@ Three operational rules borrowed directly from how Patrick wants to be worked wi
 
 ---
 
-## 13. Open Questions to Surface, Not Guess
+## 13. Resolved Decisions (was: Open Questions)
 
-These are decisions Patrick needs to make. Do **not** silently default; ask in the PR or commit message.
+Resolved during Plan 1 review. Update this section if any decision changes.
 
-- Persona vault: sops+age (simple, file-based) or Vault (operationally heavier, better for multi-operator)? Default: sops+age for v1.
-- Proxy provider: which mobile pool? Pricing varies 5–10x. Patrick to pick.
-- Telemetry retention: Loki defaults to 31 days. Persona behavioral analysis benefits from longer. Patrick to pick.
-- Persona warmup automation: hand-roll or use a service like Multilogin? Default: hand-roll. Multilogin is nontrivial $$.
-- Does Hermes hold its own persona context, or does the manifold own it entirely? Default: manifold owns; Hermes references by `persona_id`. Confirm.
+- **Persona vault:** sops+age. File-based, version-controllable, no additional service to maintain. Revisit if a second operator joins or a regulated workload is added.
+- **Manifold owns persona context.** Hermes references personas by `persona_id` only. Hermes never holds credentials, proxy assignments, or browser-profile paths. This is a trust-boundary decision, not a convenience decision — see §7.5.
+- **Proxy provider:** TBD. Mobile pool, sticky-per-persona ≥ 24h. Patrick to choose between SmartProxy / Soax / IPRoyal mobile based on pricing and pool quality. Default placeholder in `.env.example` until decided.
+- **Telemetry retention:** 31 days hot (Loki default), 180 days cold (compressed archive in object storage). Persona behavioral baselines need the longer window.
+- **Persona warmup automation:** hand-roll. Multilogin and equivalent commercial stacks are revisitable if persona attrition becomes the bottleneck.
+- **Hermes ↔ Manifold transport:** Unix domain socket (host-local). See §7.5.
 
 ---
 
