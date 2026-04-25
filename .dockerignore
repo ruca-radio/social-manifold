@@ -1,0 +1,10 @@
+**/node_modules
+**/dist
+.git
+.env
+.env.local
+*.log
+docs/
+ops/
+tests/
+**/coverage

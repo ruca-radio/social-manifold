@@ -1,0 +1,9 @@
+services:
+  core:
+    build:
+      context: .
+      dockerfile: packages/core/Dockerfile
+    image: social-manifold/core:dev
+    stdin_open: true
+    tty: false
+    restart: "no"
