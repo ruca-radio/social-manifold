@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "@social-manifold/contracts": "workspace:*",
+    "undici": "^6.21.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

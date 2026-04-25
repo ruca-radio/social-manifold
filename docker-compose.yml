@@ -29,6 +29,22 @@ services:
       # audit log persists across restarts
       - vault_audit:/var/lib/social-manifold
 
+  child-discord:
+    build:
+      context: .
+      dockerfile: packages/child-discord/Dockerfile
+    image: social-manifold/child-discord:dev
+    restart: unless-stopped
+    depends_on:
+      - vault
+    environment:
+      CHILD_DISCORD_SOCKET_PATH: /run/social-manifold/children/discord.sock
+      VAULT_SOCKET_PATH: /run/social-manifold/vault.sock
+    volumes:
+      # MCP-over-UDS — bind both vault.sock and the children/ dir from the host.
+      # Created by scripts/setup-runtime-dir.sh (see ops/local/runbook.md).
+      - /run/social-manifold:/run/social-manifold
+
 networks:
   manifold_core:
     driver: bridge

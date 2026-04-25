@@ -2,13 +2,23 @@ import { describe, it, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "../src/server.js";
+import type { DiscordChildClient } from "../src/child-clients/discord.js";
+
+const fakeDiscord = {
+  postToCommunity: async (input: { idempotency_key?: string }) => ({
+    status: "ok",
+    platform_response_id: "fake-msg-9",
+    idempotency_key: input.idempotency_key ?? "generated",
+    telemetry_span_id: null,
+    warnings: [],
+  }),
+} as unknown as DiscordChildClient;
 
 describe("MCP server", () => {
-  it("lists post_to_community as a tool and returns an echoed VerbResult", async () => {
-    const server = createServer();
+  it("lists post_to_community as a tool and dispatches discord refs", async () => {
+    const server = createServer({ discord: fakeDiscord });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
-
     await server.connect(serverTransport);
 
     const client = new Client({ name: "test-client", version: "0.0.1" });
@@ -20,18 +30,19 @@ describe("MCP server", () => {
     const callResult = await client.callTool({
       name: "post_to_community",
       arguments: {
-        persona_id: "persona_alpha",
-        community_ref: "discord://guild:1/channel:2",
+        persona_id: "p1",
+        community_ref: "discord://guild:111/channel:222",
         content: "hi",
         idempotency_key: "k1",
       },
     });
-
-    const textBlock = (callResult.content as { type: string; text: string }[])[0];
+    const textBlock = (
+      callResult.content as { type: string; text: string }[]
+    )[0];
     const payload = JSON.parse(textBlock.text);
-    expect(payload.status).toBe("echoed");
+    expect(payload.status).toBe("ok");
+    expect(payload.platform_response_id).toBe("fake-msg-9");
     expect(payload.idempotency_key).toBe("k1");
-    expect(payload.platform_response_id).toBeNull();
 
     await client.close();
     await server.close();

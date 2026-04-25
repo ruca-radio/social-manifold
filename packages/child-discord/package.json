@@ -1,13 +1,9 @@
 {
-  "name": "@social-manifold/persona-vault",
+  "name": "@social-manifold/child-discord",
   "version": "0.0.1",
   "private": true,
   "type": "module",
   "main": "dist/server.js",
-  "exports": {
-    ".": "./dist/server.js",
-    "./client": "./dist/client/index.js"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
@@ -15,10 +11,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "@discordjs/rest": "^2.4.0",
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@social-manifold/contracts": "workspace:*",
+    "@social-manifold/persona-vault": "workspace:*",
+    "discord-api-types": "^0.37.110",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.0",
     "tsx": "^4.7.0",
     "typescript": "^5.4.5",
