@@ -407,6 +407,15 @@ Why MCP-as-transport everywhere, not internal HTTP-RPC:
 The directory `/run/social-manifold/children/` is created by
 `scripts/setup-runtime-dir.sh` (same mode/group as the parent).
 
+**Client lifetime is process-lifetime.** `StreamableHTTPServerTransport`
+is single-session per server instance. The core establishes one MCP
+client per child at startup and reuses it for all calls. Per-request
+client construction will fail with "Server already initialized." This
+constrains future patterns — any "spawn-on-demand child" or "isolated
+client per test" design must either run one server-instance-per-client
+or use a different transport. Surfaced and confirmed during Plan 4
+integration testing (PR #3).
+
 ### Network isolation rules (non-negotiable)
 
 1. **Persona browser containers run on a dedicated Docker bridge
