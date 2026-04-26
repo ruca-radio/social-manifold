@@ -2,6 +2,95 @@
 
 Operational notes for running Social Manifold on Patrick's main production host (co-located with Hermes — see CLAUDE.md §7.5).
 
+## Hermes MCP registration (the bridge)
+
+Once the children are running, the core MCP can be exposed to Hermes as a stdio MCP server. Hermes spawns the wrapper script; they speak JSON-RPC over its stdio, and `post_to_community` becomes a callable tool inside the agent.
+
+### Wrapper
+
+`bin/social-manifold-core-mcp` is a self-contained stdio entrypoint. It:
+- sets `CORE_IDEMPOTENCY_DB`, `CORE_PERSONAS_ROOT`, `CHILD_DISCORD_SOCKET_PATH`, `CHILD_REDDIT_SOCKET_PATH` to defaults rooted at the repo + canonical `/run/social-manifold/` paths,
+- fails fast if `packages/core/dist/server.js` is missing (build wasn't run) or any child socket is absent (services aren't up),
+- creates the local `.runtime/` dir for the SQLite ledger,
+- `exec`s `node packages/core/dist/server.js` so Hermes' lifecycle controls the process.
+
+Operator overrides any env var by setting it in the Hermes MCP config entry; the wrapper honors what's already set.
+
+### Prerequisite checklist before Hermes attaches
+
+```bash
+# 1. one-time per reboot
+sudo ./scripts/setup-runtime-dir.sh
+
+# 2. one-time per code change
+pnpm install && pnpm -r build
+
+# 3. continuous — the children must be running
+docker compose up -d vault child-discord child-reddit
+```
+
+### Hermes MCP config snippet
+
+```json
+{
+  "social-manifold": {
+    "command": "/home/rucaradio/tori/social-manifold/bin/social-manifold-core-mcp"
+  }
+}
+```
+
+(Adapt to Hermes' actual config schema — argv form, env-override map, etc. The wrapper accepts no positional args; everything is env.)
+
+After registering and restarting Hermes, the `post_to_community` tool is callable from the agent. The first call materializes the MCP-client-per-child connections; subsequent calls reuse them for the lifetime of the wrapper process (see CLAUDE.md §7.5 — Client lifetime is process-lifetime).
+
+### When the wrapper exits
+
+Hermes will see the MCP go away. The two ways this happens:
+- operator restart (intentional)
+- one of the child sockets disappeared mid-run (vault/child-discord/child-reddit was stopped). Hermes will respawn the wrapper; the wrapper's startup checks will then fail loudly with the docker-compose hint.
+
+### Smoke test outside Hermes
+
+Before registering with Hermes, you can drive the core directly via the MCP SDK's stdio client to confirm the wrapper boots and the tool is reachable. Run from inside `packages/core/` so node resolves `@modelcontextprotocol/sdk` from that package's `node_modules`:
+
+```bash
+cd /home/rucaradio/tori/social-manifold/packages/core
+cat > /tmp/smoke.mjs <<'JS'
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+const t = new StdioClientTransport({
+  command: "/home/rucaradio/tori/social-manifold/bin/social-manifold-core-mcp",
+});
+const c = new Client({ name: "smoke", version: "0.0.1" });
+await c.connect(t);
+const tools = await c.listTools();
+console.log("tools:", tools.tools.map(x => x.name));
+await c.close();
+JS
+node --import "data:text/javascript,import {register} from 'node:module';register('file://' + process.cwd() + '/node_modules/.pnpm/', import.meta.url);" /tmp/smoke.mjs 2>/dev/null || node /tmp/smoke.mjs
+```
+
+Or simpler — copy the script into the package and run it there:
+```bash
+cd /home/rucaradio/tori/social-manifold/packages/core
+cat > smoke.mjs <<'JS'
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+const t = new StdioClientTransport({
+  command: "/home/rucaradio/tori/social-manifold/bin/social-manifold-core-mcp",
+});
+const c = new Client({ name: "smoke", version: "0.0.1" });
+await c.connect(t);
+console.log("tools:", (await c.listTools()).tools.map(x => x.name));
+await c.close();
+JS
+node smoke.mjs && rm smoke.mjs
+```
+
+Expected: `tools: [ 'post_to_community' ]`.
+
+---
+
 ## One-time host setup
 
 Required **before** the first `docker compose up`, and again after any host reboot (because `/run` is tmpfs and gets wiped on reboot).
