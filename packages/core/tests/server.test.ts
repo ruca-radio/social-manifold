@@ -1,7 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "../src/server.js";
+import { IdempotencyLedger } from "../src/idempotency/ledger.js";
+import { RateLimitAccountant } from "../src/ratelimit/accountant.js";
 import type { DiscordChildClient } from "../src/child-clients/discord.js";
 
 const fakeDiscord = {
@@ -15,8 +20,23 @@ const fakeDiscord = {
 } as unknown as DiscordChildClient;
 
 describe("MCP server", () => {
+  let dir: string;
+  let ledger: IdempotencyLedger;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "srv-"));
+    ledger = new IdempotencyLedger(join(dir, "idem.db"));
+    return () => {
+      ledger.close();
+      rmSync(dir, { recursive: true, force: true });
+    };
+  });
+
   it("lists post_to_community as a tool and dispatches discord refs", async () => {
-    const server = createServer({ discord: fakeDiscord });
+    const accountant = new RateLimitAccountant({
+      cadenceMinutes: async () => [0, 0],
+    });
+    const server = createServer({ discord: fakeDiscord, ledger, accountant });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);

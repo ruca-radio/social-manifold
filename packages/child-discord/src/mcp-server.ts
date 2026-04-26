@@ -4,7 +4,7 @@ import { z } from "zod";
 import { VaultClient } from "@social-manifold/persona-vault/client";
 import type { VerbResult } from "@social-manifold/contracts";
 import { parseDiscordRef } from "./uri.js";
-import { postMessage } from "./adapter.js";
+import { postMessage, RateLimitedError } from "./adapter.js";
 import type { DiscordRestPort } from "./deps.js";
 
 export interface ChildDiscordMcpDeps {
@@ -88,7 +88,22 @@ export function createChildDiscordMcpServer(
             warnings: [],
           };
         } catch (err) {
-          result = failed(idempotencyKey, (err as Error).message);
+          if (err instanceof RateLimitedError) {
+            result = {
+              status: "failed",
+              platform_response_id: null,
+              idempotency_key: idempotencyKey,
+              telemetry_span_id: null,
+              warnings: [
+                `discord rate limited; retry_after_seconds=${err.retry_after_seconds}`,
+              ],
+              platform_rate_limit: {
+                retry_after_seconds: err.retry_after_seconds,
+              },
+            };
+          } else {
+            result = failed(idempotencyKey, (err as Error).message);
+          }
         }
       }
 

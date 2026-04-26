@@ -140,7 +140,7 @@ These are the verbs Hermes calls. Keep this list **small and semantic**. Resist 
 | `enumerate_communities` | List communities a persona has access to | `persona_id`, `platform?` |
 | `health_check_persona` | Run shadowban/rate-limit diagnostics | `persona_id` |
 
-Every verb returns a `VerbResult` with `{status, platform_response_id, idempotency_key, telemetry_span_id, warnings[]}`.
+Every verb returns a `VerbResult` with `{status, platform_response_id, idempotency_key, telemetry_span_id, warnings[]}` plus optional extension fields. Children may set `platform_rate_limit: { retry_after_seconds: number }` when the underlying platform returns a rate-limit signal (e.g. Discord 429); the core's rate-limit accountant uses this to record backoff. Other optional extensions are added as needed; readers must treat unknown fields as opaque.
 
 **`community_ref` and `thread_ref` are universal references** — `platform://identifier` URIs that the router resolves. Examples:
 - `discord://guild:123456789/channel:987654321`
@@ -407,6 +407,15 @@ Why MCP-as-transport everywhere, not internal HTTP-RPC:
 The directory `/run/social-manifold/children/` is created by
 `scripts/setup-runtime-dir.sh` (same mode/group as the parent).
 
+**Client lifetime is process-lifetime.** `StreamableHTTPServerTransport`
+is single-session per server instance. The core establishes one MCP
+client per child at startup and reuses it for all calls. Per-request
+client construction will fail with "Server already initialized." This
+constrains future patterns — any "spawn-on-demand child" or "isolated
+client per test" design must either run one server-instance-per-client
+or use a different transport. Surfaced and confirmed during Plan 4
+integration testing (PR #3).
+
 ### Network isolation rules (non-negotiable)
 
 1. **Persona browser containers run on a dedicated Docker bridge
@@ -476,7 +485,7 @@ Two layers:
 1. **Per-platform global limit** — respect platform-published limits (Discord's 50 msg/sec, Reddit's per-OAuth-app, etc.). Implement as a token bucket per platform per credential.
 2. **Per-persona behavioral limit** — derived from `posting_cadence_minutes` in identity.yaml. Even if the platform allows more, the persona doesn't.
 
-The persona limit is the binding constraint. Children query the rate-limit accountant before every action and back off if the persona isn't due.
+The persona limit is the binding constraint. **The core enforces both layers before forwarding any call to a child** — children never see a rate-limited request. Children surface platform-observed rate limits (e.g. Discord 429) back to the core via `VerbResult.platform_rate_limit` (see §4); the core's accountant records these to inform future per-persona backoff decisions. The two-way model: core gates outbound calls; children report observed pushback inbound.
 
 ### Observability
 
