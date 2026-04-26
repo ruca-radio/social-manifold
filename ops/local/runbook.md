@@ -69,6 +69,43 @@ The idempotency ledger does NOT have this caveat — it's SQLite-backed in the `
 
 Editing `personas/<id>/identity.yaml` (e.g. changing `posting_cadence_minutes`) requires `docker compose restart core` to pick up — the identity loader caches per-process.
 
+## Reddit OAuth bootstrap (one-time, per persona)
+
+Reddit's OAuth model requires a long-lived `refresh_token` obtained via a one-time user-flow redirect. This is a manual operator step per persona, run once before that persona's reddit platform can be used.
+
+1. Create a Reddit OAuth web app at https://www.reddit.com/prefs/apps. App type: **web app**. Redirect URI: a URL you control (`http://localhost:8080/cb` works for the bootstrap).
+2. Note the `client_id` (under the app name) and `client_secret`.
+3. From a browser logged into the persona's Reddit account, visit:
+   ```
+   https://www.reddit.com/api/v1/authorize?client_id=<CLIENT_ID>&response_type=code&state=x&redirect_uri=<REDIRECT_URI>&duration=permanent&scope=identity submit
+   ```
+4. Approve. Reddit redirects to `<REDIRECT_URI>?code=<CODE>&state=x`.
+5. Exchange the code for tokens:
+   ```bash
+   curl -X POST -u "<CLIENT_ID>:<CLIENT_SECRET>" \
+     -d "grant_type=authorization_code&code=<CODE>&redirect_uri=<REDIRECT_URI>" \
+     -A "social-manifold/0.0.1" \
+     https://www.reddit.com/api/v1/access_token
+   ```
+6. The response includes `refresh_token`. Add to the persona's encrypted credentials:
+   ```yaml
+   reddit:
+     client_id: <CLIENT_ID>
+     client_secret: <CLIENT_SECRET>
+     refresh_token: <REFRESH_TOKEN>
+   ```
+   Re-encrypt with sops.
+7. Set `platforms.reddit.enabled: true` in the persona's `identity.yaml`.
+8. `docker compose restart core child-reddit`.
+
+### Audit log shift for OAuth-backed children
+
+Reddit (and other OAuth platforms) refresh access_tokens roughly once per hour per persona. The vault's audit log records these refreshes — NOT every verb call. If you see fewer audit entries than verb calls, that's the OAuth child caching its access_token; per-action audit lives at the child level (deferred to the telemetry plan).
+
+### Reddit ban-speed warning
+
+Reddit will ban an unwarmed bot account faster than Discord will. Use a real human-warmed staging account before any production-ish testing. Do NOT use a fresh account.
+
 ## Persona rotation
 
 Stub. Persona rotation runbook lands with later plans (when a child MCP first depends on a real persona). For staging, regenerate by deleting the persona dir and re-running `pnpm persona:bootstrap-staging`.

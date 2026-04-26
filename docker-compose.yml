@@ -56,6 +56,20 @@ services:
       # Created by scripts/setup-runtime-dir.sh (see ops/local/runbook.md).
       - /run/social-manifold:/run/social-manifold
 
+  child-reddit:
+    build:
+      context: .
+      dockerfile: packages/child-reddit/Dockerfile
+    image: social-manifold/child-reddit:dev
+    restart: unless-stopped
+    depends_on:
+      - vault
+    environment:
+      CHILD_REDDIT_SOCKET_PATH: /run/social-manifold/children/reddit.sock
+      VAULT_SOCKET_PATH: /run/social-manifold/vault.sock
+    volumes:
+      - /run/social-manifold:/run/social-manifold
+
 networks:
   manifold_core:
     driver: bridge
