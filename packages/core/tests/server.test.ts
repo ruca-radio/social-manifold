@@ -8,6 +8,7 @@ import { createServer } from "../src/server.js";
 import { IdempotencyLedger } from "../src/idempotency/ledger.js";
 import { RateLimitAccountant } from "../src/ratelimit/accountant.js";
 import type { DiscordChildClient } from "../src/child-clients/discord.js";
+import type { RedditChildClient } from "../src/child-clients/reddit.js";
 
 const fakeDiscord = {
   postToCommunity: async (input: { idempotency_key?: string }) => ({
@@ -18,6 +19,12 @@ const fakeDiscord = {
     warnings: [],
   }),
 } as unknown as DiscordChildClient;
+
+const stubReddit = {
+  postToCommunity: async () => {
+    throw new Error("reddit not used in this test");
+  },
+} as unknown as RedditChildClient;
 
 describe("MCP server", () => {
   let dir: string;
@@ -36,7 +43,12 @@ describe("MCP server", () => {
     const accountant = new RateLimitAccountant({
       cadenceMinutes: async () => [0, 0],
     });
-    const server = createServer({ discord: fakeDiscord, ledger, accountant });
+    const server = createServer({
+      discord: fakeDiscord,
+      reddit: stubReddit,
+      ledger,
+      accountant,
+    });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);

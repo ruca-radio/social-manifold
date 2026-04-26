@@ -32,6 +32,18 @@ export default defineConfig({
         repoRoot,
         "packages/child-discord/dist/deps.js",
       ),
+      "@social-manifold/child-reddit/dist/server.js": resolve(
+        repoRoot,
+        "packages/child-reddit/dist/server.js",
+      ),
+      "@social-manifold/child-reddit/dist/deps.js": resolve(
+        repoRoot,
+        "packages/child-reddit/dist/deps.js",
+      ),
+      "@social-manifold/child-reddit/dist/auth.js": resolve(
+        repoRoot,
+        "packages/child-reddit/dist/auth.js",
+      ),
     },
   },
 });
