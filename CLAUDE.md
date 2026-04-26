@@ -158,7 +158,7 @@ This is the operational truth-table. Update it when platforms change their stanc
 |----------|----------------|----------|-------|
 | Discord | Bot API (discord.js) | None | Bot only — selfbots are ToS violation, do not implement. Limit to guilds where bot is invited. |
 | Telegram | Bot API for channels we own; MTProto (gramjs) for personal-account flows | None | MTProto is gray-area-tolerated. Use only where bot model can't satisfy the use case. |
-| Reddit | OAuth2 (snoowrap) | None | Honor per-subreddit rules. Throttle aggressively — Reddit's 2023 pricing made the API unforgiving. |
+| Reddit | OAuth2 (direct REST via `undici`) | None | snoowrap last released 2022-06; snoots stuck in pre-1.0 since 2023. Both predate Reddit's 2023 API changes and are unsafe to depend on. Honor per-subreddit rules. Throttle aggressively — Reddit's 2023 pricing made the API unforgiving. |
 | Matrix | matrix-js-sdk, application service or bot user | None | Cleanest API in the stack. |
 | Bluesky | @atproto/api | None | Open protocol, low friction. |
 | Mastodon | masto.js, per-instance OAuth | None | Per-instance — the manifold tracks instance-specific creds. |
