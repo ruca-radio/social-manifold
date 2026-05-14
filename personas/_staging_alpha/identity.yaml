@@ -12,4 +12,5 @@ platforms:
     enabled: true
     credential_ref: discord_token
   reddit:
-    enabled: false
+    enabled: false   # set true once you've populated reddit creds and a refresh token (see ops/local/runbook.md)
+    credential_ref: reddit_oauth

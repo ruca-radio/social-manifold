@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# social-manifold-core-mcp
+#
+# Stdio MCP entrypoint for Hermes to attach to. Hermes spawns this process;
+# they speak JSON-RPC over its stdio. The core MCP's StdioServerTransport
+# wires the post_to_community tool to Hermes — Hermes calls it like any
+# other tool.
+#
+# Prerequisites the operator must have done before Hermes attaches:
+#   1. sudo /home/rucaradio/tori/social-manifold/scripts/setup-runtime-dir.sh
+#      (one-time, plus after each host reboot — /run is tmpfs)
+#   2. cd /home/rucaradio/tori/social-manifold && pnpm install && pnpm -r build
+#   3. docker compose up -d vault child-discord child-reddit
+#
+# Hermes MCP config snippet (adapt to Hermes' actual config format):
+#   {
+#     "social-manifold": {
+#       "command": "/home/rucaradio/tori/social-manifold/bin/social-manifold-core-mcp"
+#     }
+#   }
+#
+# After registering, restart/reload Hermes so it picks up the new tool.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# Defaults — operator can override via env if needed
+export CORE_IDEMPOTENCY_DB="${CORE_IDEMPOTENCY_DB:-$REPO_ROOT/.runtime/idempotency.db}"
+export CORE_PERSONAS_ROOT="${CORE_PERSONAS_ROOT:-$REPO_ROOT/personas}"
+export CHILD_DISCORD_SOCKET_PATH="${CHILD_DISCORD_SOCKET_PATH:-/run/social-manifold/children/discord.sock}"
+export CHILD_REDDIT_SOCKET_PATH="${CHILD_REDDIT_SOCKET_PATH:-/run/social-manifold/children/reddit.sock}"
+
+# Fail-fast on missing build artifact. Hermes will spawn this process; if
+# it dies on stdin without producing JSON-RPC, the failure mode in Hermes
+# is opaque ("MCP didn't initialize"). Better a loud stderr with the fix.
+if [[ ! -f "$REPO_ROOT/packages/core/dist/server.js" ]]; then
+  echo "social-manifold-core-mcp: missing $REPO_ROOT/packages/core/dist/server.js" >&2
+  echo "  Run: cd $REPO_ROOT && pnpm install && pnpm -r build" >&2
+  exit 1
+fi
+
+# Fail-fast on missing children sockets. The core's MCP clients connect
+# lazily on first verb call, so without this check Hermes would see the
+# tool register fine and only fail on actual use. Surface it at startup.
+for sock in "$CHILD_DISCORD_SOCKET_PATH" "$CHILD_REDDIT_SOCKET_PATH"; do
+  if [[ ! -S "$sock" ]]; then
+    echo "social-manifold-core-mcp: child socket $sock not present" >&2
+    echo "  Run: cd $REPO_ROOT && docker compose up -d vault child-discord child-reddit" >&2
+    exit 1
+  fi
+done
+
+# Local runtime dir for the SQLite ledger (the operator-host equivalent
+# of the named volume that the docker compose `core` service uses).
+mkdir -p "$(dirname "$CORE_IDEMPOTENCY_DB")"
+
+# exec so signals pass straight through; Hermes' lifecycle controls ours.
+exec node packages/core/dist/server.js

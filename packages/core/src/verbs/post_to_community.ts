@@ -5,15 +5,21 @@ import type {
 } from "@social-manifold/contracts";
 import { getScheme } from "../router/route-by-uri.js";
 import { DiscordChildClient } from "../child-clients/discord.js";
+import { RedditChildClient } from "../child-clients/reddit.js";
 import { IdempotencyLedger } from "../idempotency/ledger.js";
 import { RateLimitAccountant } from "../ratelimit/accountant.js";
 
 export interface PostToCommunityDeps {
   discord: DiscordChildClient;
+  reddit: RedditChildClient;
   ledger: IdempotencyLedger;
   accountant: RateLimitAccountant;
   /** Injectable clock for tests; defaults to Date.now. */
   now?: () => number;
+}
+
+interface ChildClient {
+  postToCommunity(input: PostToCommunityInput): Promise<VerbResult>;
 }
 
 export async function postToCommunity(
@@ -23,14 +29,11 @@ export async function postToCommunity(
   const idempotencyKey = input.idempotency_key ?? randomUUID();
   const now = deps.now ?? (() => Date.now());
 
-  // 1. dedup check (only if caller supplied a key — generated UUIDs would
-  //    never hit, so the lookup is a free no-op then)
   if (input.idempotency_key) {
     const cached = deps.ledger.lookup(idempotencyKey);
     if (cached) return cached;
   }
 
-  // 2. parse + route by scheme
   const scheme = getScheme(input.community_ref);
   if (scheme === null) {
     return failed(
@@ -38,16 +41,18 @@ export async function postToCommunity(
       `unrecognized community_ref scheme: ${input.community_ref}`,
     );
   }
-  if (scheme !== "discord") {
+
+  const child = pickChild(scheme, deps);
+  if (!child) {
     return failed(idempotencyKey, `unsupported platform: ${scheme}`);
   }
 
-  // 3. rate-limit check (per-persona behavioral + platform backoff). NOT
-  //    cached in the ledger if denied — the operator should retry once the
-  //    window opens, with the same key, and that retry should hit.
+  // Per-platform accountant key — Plan 5 cleanup. Plan 4 hardcoded "discord";
+  // with reddit added, that would have collapsed both platforms onto a single
+  // rate-limit slot per persona. Use the actual scheme.
   const reservation = await deps.accountant.checkAndReserve(
     input.persona_id,
-    "discord",
+    scheme,
     now(),
   );
   if (!reservation.allowed) {
@@ -57,10 +62,9 @@ export async function postToCommunity(
     );
   }
 
-  // 4. forward to child
   let childResult: VerbResult;
   try {
-    childResult = await deps.discord.postToCommunity({
+    childResult = await child.postToCommunity({
       ...input,
       idempotency_key: idempotencyKey,
     });
@@ -68,18 +72,15 @@ export async function postToCommunity(
     childResult = failed(idempotencyKey, (err as Error).message);
   }
 
-  // 5. if child observed a platform-level rate limit, feed it back to the
-  //    accountant so future checks respect the backoff
   if (childResult.platform_rate_limit) {
     deps.accountant.recordPlatformBackoff(
       input.persona_id,
-      "discord",
+      scheme,
       childResult.platform_rate_limit.retry_after_seconds,
       now(),
     );
   }
 
-  // 6. record in ledger so subsequent retries with the same key are deduped
   deps.ledger.record(
     idempotencyKey,
     input.persona_id,
@@ -88,6 +89,20 @@ export async function postToCommunity(
   );
 
   return childResult;
+}
+
+function pickChild(
+  scheme: string,
+  deps: PostToCommunityDeps,
+): ChildClient | null {
+  switch (scheme) {
+    case "discord":
+      return deps.discord;
+    case "reddit":
+      return deps.reddit;
+    default:
+      return null;
+  }
 }
 
 function failed(idempotencyKey: string, warning: string): VerbResult {

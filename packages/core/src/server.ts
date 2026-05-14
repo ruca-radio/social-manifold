@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { DiscordChildClient } from "./child-clients/discord.js";
+import { RedditChildClient } from "./child-clients/reddit.js";
 import { IdempotencyLedger } from "./idempotency/ledger.js";
 import { RateLimitAccountant } from "./ratelimit/accountant.js";
 import { IdentityLoader } from "./ratelimit/identity-loader.js";
@@ -26,6 +27,7 @@ const PostToCommunityShape = {
 
 export interface CreateServerOptions {
   discord: DiscordChildClient;
+  reddit: RedditChildClient;
   ledger: IdempotencyLedger;
   accountant: RateLimitAccountant;
 }
@@ -45,6 +47,7 @@ export function createServer(opts: CreateServerOptions): McpServer {
     async (args) => {
       const result = await postToCommunity(args, {
         discord: opts.discord,
+        reddit: opts.reddit,
         ledger: opts.ledger,
         accountant: opts.accountant,
       });
@@ -62,6 +65,9 @@ if (isMain) {
   const discordSocket =
     process.env.CHILD_DISCORD_SOCKET_PATH ??
     "/run/social-manifold/children/discord.sock";
+  const redditSocket =
+    process.env.CHILD_REDDIT_SOCKET_PATH ??
+    "/run/social-manifold/children/reddit.sock";
   const ledgerPath =
     process.env.CORE_IDEMPOTENCY_DB ??
     "/var/lib/social-manifold/idempotency.db";
@@ -69,10 +75,11 @@ if (isMain) {
     process.env.CORE_PERSONAS_ROOT ?? "/var/social-manifold/personas";
 
   const discord = new DiscordChildClient({ socketPath: discordSocket });
+  const reddit = new RedditChildClient({ socketPath: redditSocket });
   const ledger = new IdempotencyLedger(ledgerPath);
   const accountant = new RateLimitAccountant(new IdentityLoader(personasRoot));
 
-  const server = createServer({ discord, ledger, accountant });
+  const server = createServer({ discord, reddit, ledger, accountant });
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
